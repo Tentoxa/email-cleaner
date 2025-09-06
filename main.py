@@ -40,6 +40,8 @@ logger = setup_logger(
 try:
     CLEANING_KEYWORDS = json.loads(os.environ["CLEANING_KEYWORDS"])
     WHITELIST_KEYWORDS = json.loads(os.environ["WHITELIST_KEYWORDS"])
+    logger.info("Cleaning Keywords: " + ", ".join([kw for kw in CLEANING_KEYWORDS if kw]))
+    logger.info("Whitelist Keywords: " + ", ".join([kw for kw in WHITELIST_KEYWORDS if kw]))
 except Exception as e:
     logger.error(f"Error loading keywords from environment variables: {e}")
     os._exit(1)

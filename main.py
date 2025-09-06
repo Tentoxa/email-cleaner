@@ -177,7 +177,7 @@ class Mailbox():
 
             for email_id in reversed(email_ids):
                 try:
-                    status, msg_data = self.connection.fetch(email_id, "(RFC822)")
+                    status, msg_data = self.connection.fetch(email_id, "(BODY.PEEK[])")
                     if status != "OK":
                         logger.error(f"Failed to fetch email ID {email_id} for {self.config.email}")
                         continue
@@ -266,7 +266,7 @@ class Mailbox():
                     continue
 
                 try:
-                    status, msg_data = self.connection.fetch(email_id, "(RFC822)")
+                    status, msg_data = self.connection.fetch(email_id, "(BODY.PEEK[])")
                     if status != "OK":
                         continue
 

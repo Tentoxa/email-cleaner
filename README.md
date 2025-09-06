@@ -16,7 +16,7 @@ It keeps your inbox clean by **flagging and deleting unwanted emails** — while
 ## ⚙️ Installation
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/Tentoxa/email-cleaner.git
 cd email-cleaner
 pip install -r requirements.txt
 ```
@@ -50,7 +50,3 @@ Runs continuously until stopped (Ctrl+C / SIGTERM).
 ## 📦 Dependencies
 
 - `imaplib`, `email`, `threading`, `logging`, `dotenv`, `json`
-
-## 📜 License
-
-MIT License.  

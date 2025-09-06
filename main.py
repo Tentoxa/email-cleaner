@@ -234,12 +234,32 @@ class Mailbox():
         deletion_threshold = current_time - timedelta(minutes=self.DELETION_DELAY_MINUTES)
 
         with self.lock:
-            # First, process pending deletions
+            # First, get current email IDs to validate against
+            status, messages = self.connection.search(None, "ALL")
+            if status != "OK":
+                logger.error(f"Failed to fetch emails for {self.config.email}")
+                return
+
+            current_email_ids = set(messages[0].split())
+
+            # Process pending deletions with validation
             emails_to_delete = []
+            invalid_ids = []
+
             for email_id, deletion_time in list(self.cache.pending_deletion.items()):
                 if current_time >= deletion_time:
-                    emails_to_delete.append(email_id)
+                    if email_id in current_email_ids:
+                        emails_to_delete.append(email_id)
+                    else:
+                        # Email no longer exists, remove from pending
+                        invalid_ids.append(email_id)
+                        logger.warning(f"Email ID {int(email_id)} no longer exists, removing from pending deletion")
 
+            # Clean up invalid IDs
+            for email_id in invalid_ids:
+                del self.cache.pending_deletion[email_id]
+
+            # Delete valid emails
             if emails_to_delete:
                 for email_id in emails_to_delete:
                     try:
@@ -248,6 +268,9 @@ class Mailbox():
                         del self.cache.pending_deletion[email_id]
                     except Exception as e:
                         logger.error(f"Error deleting pending email ID {email_id}: {e}")
+                        # Remove from pending if it failed
+                        if email_id in self.cache.pending_deletion:
+                            del self.cache.pending_deletion[email_id]
 
                 self.connection.expunge()
 

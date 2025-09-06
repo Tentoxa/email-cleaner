@@ -27,8 +27,8 @@ Use a `.env` file or environment variables:
 
 ```env
 MAILBOXES=["user1@example.com:password:imap.server.com:993","user2@example.com:password:imap.server.com:993"]
-CLEANING_KEYWORDS=["otp","promo","advertisement","spam"]
-WHITELIST_KEYWORDS=["nike","checkout","order","invoice"]
+CLEANING_KEYWORDS=["otp","promo","advertisement","spam", "Einmalcode"]
+WHITELIST_KEYWORDS=["order","invoice"]
 SCAN_INTERVAL=60
 DELETION_DELAY_MINUTES=20
 ```

@@ -42,7 +42,7 @@ DELETION_DELAY_MINUTES=20
 ## ▶️ Usage
 
 ```bash
-python email_cleaner.py
+python main.py
 ```
 
 Runs continuously until stopped (Ctrl+C / SIGTERM).  

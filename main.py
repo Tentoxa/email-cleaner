@@ -26,9 +26,9 @@ class MailboxConfig:
 
 @dataclass
 class EmailCache:
-    """Cache to track processed emails"""
-    processed_ids: Set[bytes] = field(default_factory=set)  # IDs that are >20min old and won't be deleted
-    pending_deletion: dict = field(default_factory=dict)  # {email_id: scheduled_deletion_time}
+    """Cache to track processed emails using UIDs"""
+    processed_uids: Set[bytes] = field(default_factory=set)  # UIDs that are >20min old and won't be deleted
+    pending_deletion: dict = field(default_factory=dict)  # {email_uid: scheduled_deletion_time}
 
 
 load_dotenv()
@@ -155,31 +155,32 @@ class Mailbox():
         return None
 
     def initial_cleanup(self):
-        """Initial cleanup - process all existing emails"""
+        """Initial cleanup - process all existing emails using UIDs"""
         logger.info(f"Starting initial cleanup for {self.config.email}")
         current_time = datetime.now(tz=None)
         deletion_threshold = current_time - timedelta(minutes=self.DELETION_DELAY_MINUTES)
 
         with self.lock:
-            # Fetch all emails
-            status, messages = self.connection.search(None, "ALL")
+            # Fetch all emails using UID SEARCH
+            status, messages = self.connection.uid('search', None, "ALL")
             if status != "OK":
                 logger.error(f"Failed to fetch emails for {self.config.email}")
                 return
 
-            email_ids = messages[0].split()
-            logger.info(f"Found {len(email_ids)} emails in {self.config.email}")
+            email_uids = messages[0].split()
+            logger.info(f"Found {len(email_uids)} emails in {self.config.email}")
             logger.info("Processing emails... this may take a while depending on the number of emails.")
 
             deleted_count = 0
             flagged_count = 0
             cached_count = 0
 
-            for email_id in reversed(email_ids):
+            for uid in reversed(email_uids):
                 try:
-                    status, msg_data = self.connection.fetch(email_id, "(BODY.PEEK[])")
+                    # Use UID FETCH instead of FETCH
+                    status, msg_data = self.connection.uid('fetch', uid, "(BODY.PEEK[])")
                     if status != "OK":
-                        logger.error(f"Failed to fetch email ID {email_id} for {self.config.email}")
+                        logger.error(f"Failed to fetch email UID {uid.decode()} for {self.config.email}")
                         continue
 
                     msg = email.message_from_bytes(msg_data[0][1])
@@ -190,7 +191,7 @@ class Mailbox():
 
                     if not email_date:
                         # If we can't determine the date, skip this email
-                        logger.warning(f"Skipping email ID {int(email_id)} - no date found")
+                        logger.warning(f"Skipping email UID {uid.decode()} - no date found")
                         continue
 
                     # Make email_date timezone-naive for comparison
@@ -200,24 +201,24 @@ class Mailbox():
                     if self._should_delete_email(subject, from_, body):
                         if email_date < deletion_threshold:
                             # Email is older than 20 minutes and matches keywords - delete immediately
-                            self.connection.store(email_id, "+FLAGS", "\\Deleted")
+                            self.connection.uid('store', uid, "+FLAGS", "\\Deleted")
                             logger.info(
-                                f"Deleted email ID {int(email_id)} with subject '{subject}' from '{from_}' (received at {email_date})")
+                                f"Deleted email UID {uid.decode()} with subject '{subject}' from '{from_}' (received at {email_date})")
                             deleted_count += 1
                         else:
                             # Email matches keywords but is too recent - schedule for deletion
                             deletion_time = email_date + timedelta(minutes=self.DELETION_DELAY_MINUTES)
-                            self.cache.pending_deletion[email_id] = deletion_time
+                            self.cache.pending_deletion[uid] = deletion_time
                             logger.info(
-                                f"Flagged email ID {int(email_id)} for deletion at {deletion_time} - subject: '{subject}'")
+                                f"Flagged email UID {uid.decode()} for deletion at {deletion_time} - subject: '{subject}'")
                             flagged_count += 1
                     else:
                         # Email doesn't match deletion criteria
-                        self.cache.processed_ids.add(email_id)
+                        self.cache.processed_uids.add(uid)
                         cached_count += 1
 
                 except Exception as e:
-                    logger.error(f"Error processing email ID {email_id}: {e}")
+                    logger.error(f"Error processing email UID {uid}: {e}")
                     continue
 
             # Expunge deleted emails
@@ -228,68 +229,70 @@ class Mailbox():
             f"Initial cleanup completed for {self.config.email}: {deleted_count} deleted, {flagged_count} flagged, {cached_count} cached")
 
     def scan_and_clean(self):
-        """Periodic scan to check for new emails and process pending deletions"""
+        """Periodic scan to check for new emails and process pending deletions using UIDs"""
         logger.info(f"Starting periodic scan for {self.config.email}")
         current_time = datetime.now(tz=None)
         deletion_threshold = current_time - timedelta(minutes=self.DELETION_DELAY_MINUTES)
 
         with self.lock:
-            # First, get current email IDs to validate against
-            status, messages = self.connection.search(None, "ALL")
+            # First, get current email UIDs to validate against
+            status, messages = self.connection.uid('search', None, "ALL")
             if status != "OK":
                 logger.error(f"Failed to fetch emails for {self.config.email}")
                 return
 
-            current_email_ids = set(messages[0].split())
+            current_uids = set(messages[0].split())
 
             # Process pending deletions with validation
             emails_to_delete = []
-            invalid_ids = []
+            invalid_uids = []
 
-            for email_id, deletion_time in list(self.cache.pending_deletion.items()):
+            for uid, deletion_time in list(self.cache.pending_deletion.items()):
                 if current_time >= deletion_time:
-                    if email_id in current_email_ids:
-                        emails_to_delete.append(email_id)
+                    if uid in current_uids:
+                        emails_to_delete.append(uid)
                     else:
                         # Email no longer exists, remove from pending
-                        invalid_ids.append(email_id)
-                        logger.warning(f"Email ID {int(email_id)} no longer exists, removing from pending deletion")
+                        invalid_uids.append(uid)
+                        logger.warning(f"Email UID {uid.decode()} no longer exists, removing from pending deletion")
 
-            # Clean up invalid IDs
-            for email_id in invalid_ids:
-                del self.cache.pending_deletion[email_id]
+            # Clean up invalid UIDs
+            for uid in invalid_uids:
+                del self.cache.pending_deletion[uid]
 
             # Delete valid emails
             if emails_to_delete:
-                for email_id in emails_to_delete:
+                for uid in emails_to_delete:
                     try:
-                        self.connection.store(email_id, "+FLAGS", "\\Deleted")
-                        logger.info(f"Deleted pending email ID {int(email_id)}")
-                        del self.cache.pending_deletion[email_id]
+                        # Use UID STORE instead of STORE
+                        self.connection.uid('store', uid, "+FLAGS", "\\Deleted")
+                        logger.info(f"Deleted pending email UID {uid.decode()}")
+                        del self.cache.pending_deletion[uid]
                     except Exception as e:
-                        logger.error(f"Error deleting pending email ID {email_id}: {e}")
+                        logger.error(f"Error deleting pending email UID {uid}: {e}")
                         # Remove from pending if it failed
-                        if email_id in self.cache.pending_deletion:
-                            del self.cache.pending_deletion[email_id]
+                        if uid in self.cache.pending_deletion:
+                            del self.cache.pending_deletion[uid]
 
                 self.connection.expunge()
 
             # Now check for new emails
-            status, messages = self.connection.search(None, "ALL")
+            status, messages = self.connection.uid('search', None, "ALL")
             if status != "OK":
                 logger.error(f"Failed to fetch emails for {self.config.email}")
                 return
 
-            email_ids = messages[0].split()
+            email_uids = messages[0].split()
             new_emails_processed = 0
 
-            for email_id in email_ids:
+            for uid in email_uids:
                 # Skip if already processed or pending deletion
-                if email_id in self.cache.processed_ids or email_id in self.cache.pending_deletion:
+                if uid in self.cache.processed_uids or uid in self.cache.pending_deletion:
                     continue
 
                 try:
-                    status, msg_data = self.connection.fetch(email_id, "(BODY.PEEK[])")
+                    # Use UID FETCH instead of FETCH
+                    status, msg_data = self.connection.uid('fetch', uid, "(BODY.PEEK[])")
                     if status != "OK":
                         continue
 
@@ -311,21 +314,21 @@ class Mailbox():
                     if self._should_delete_email(subject, from_, body):
                         if email_date < deletion_threshold:
                             # Old email that matches keywords - delete immediately
-                            self.connection.store(email_id, "+FLAGS", "\\Deleted")
-                            logger.info(f"Deleted new email ID {int(email_id)} with subject '{subject}'")
+                            self.connection.uid('store', uid, "+FLAGS", "\\Deleted")
+                            logger.info(f"Deleted new email UID {uid.decode()} with subject '{subject}'")
                             self.connection.expunge()
                         else:
                             # Recent email that matches keywords - schedule for deletion
                             deletion_time = email_date + timedelta(minutes=self.DELETION_DELAY_MINUTES)
-                            self.cache.pending_deletion[email_id] = deletion_time
-                            logger.info(f"Flagged new email ID {int(email_id)} for deletion at {deletion_time}")
+                            self.cache.pending_deletion[uid] = deletion_time
+                            logger.info(f"Flagged new email UID {uid.decode()} for deletion at {deletion_time}")
                     else:
                         # Email doesn't match deletion criteria
-                        self.cache.processed_ids.add(email_id)
-                        logger.debug(f"Cached email ID {int(email_id)} - won't be deleted")
+                        self.cache.processed_uids.add(uid)
+                        logger.debug(f"Cached email UID {uid.decode()} - won't be deleted")
 
                 except Exception as e:
-                    logger.error(f"Error processing email ID {email_id}: {e}")
+                    logger.error(f"Error processing email UID {uid}: {e}")
                     continue
 
             if new_emails_processed > 0:
